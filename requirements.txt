@@ -1,0 +1,6 @@
+numpy==2.0.1
+PyRIC==0.1.6.3
+scapy==2.5.0
+
+# please change this line aggording to your matlab version
+matlabengine==9.13.5
