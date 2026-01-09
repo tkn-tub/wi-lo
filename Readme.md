@@ -18,7 +18,7 @@ You also need an installed MATLAB instance.
 1. Next, create a virtual environment in the repository directory. It is important to name your environment `venv`. Otherwise the Wi-Lo++ script will miss it.
 `python3 -m venv venv`
 1. Start your virtual python environment:
-`soure venv/bin/activate`
+`source venv/bin/activate`
 1. Next check your MATLAB version and find the MATLAB engine version accordingly. [pypi.org](https://pypi.org/project/matlabengine/#history) will help you.
 1. Change the matlab engine version in `requirements.txt` to the one that fits your MATLAB
 1. Install all the required python packages
