@@ -1,10 +1,10 @@
-# Wi-Lo++: The userspace CTC
+# Wi-Lo: The userspace CTC
 
-This is Wi-Lo++ the userspace cross technology communication framework.
+This is Wi-Lo the userspace cross technology communication framework.
 You can use it to transmit LoRa frames with the help of your WiFi card. 
 Other hardware is not necessary.
 You also don't have to change drivers on your machine.
-However, `sudo` access is required as Wi-Lo++ is using packet injection.
+However, `sudo` access is required as Wi-Lo is using packet injection.
 
 ## Requirements
 
@@ -14,8 +14,8 @@ You also need an installed MATLAB instance.
 
 ## How to install
 1. First of all, clone this git repository:
-`git clone https://github.com/tkn-tub/wi-lo`
-1. Next, create a virtual environment in the repository directory. It is important to name your environment `venv`. Otherwise the Wi-Lo++ script will miss it.
+`git clone ???`
+1. Next, create a virtual environment in the repository directory. It is important to name your environment `venv`. Otherwise the Wi-Lo script will miss it.
 `python3 -m venv venv`
 1. Start your virtual python environment:
 `source venv/bin/activate`
@@ -34,9 +34,9 @@ You also need an installed MATLAB instance.
 
 
 ## How to run
-To send a Wi-Lo++ frame, please make sure that the WiFi card is connected with your computer.
+To send a Wi-Lo frame, please make sure that the WiFi card is connected with your computer.
 Now, you can run `sudo -s -E ./wilo.sh -I` to list all connected WiFi cards.
-To now run Wi-Lo++ you have to type `sudo -s -E ./wilo.sh -i THE_WIFI_CARD 'This is my message for LoRa'`.
+To now run Wi-Lo you have to type `sudo -s -E ./wilo.sh -i THE_WIFI_CARD 'This is my message for LoRa'`.
 For packet injection, you have to run the script with `sudo`. Please add `-s -E` such that all paths are set correctly.
 You can add these arguments when running the script:
 - `-i` The name of the WiFi interface you want to use
@@ -55,7 +55,7 @@ You can add these arguments when running the script:
 - Anatolij Zubow, TU-Berlin, zubow@tkn
 - tkn = tkn.tu-berlin.de
 
-## How to reference Wi-Lo++
+## How to reference Wi-Lo?
 
 ## Acknowledgement
 This work bases on the Wi-Lo of Gawlowicz et al. [1] and the Bachelor thesis of Nils Einfeld [2]

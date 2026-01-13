@@ -3,4 +3,5 @@ PyRIC==0.1.6.3
 scapy==2.5.0
 
 # please change this line aggording to your matlab version
-matlabengine==9.13.5
+#matlabengine==9.13.5
+matlabengine==25.1.1
