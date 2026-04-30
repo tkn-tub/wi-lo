@@ -94,5 +94,7 @@ This work bases on the Wi-Lo of Gawlowicz et al. [1] and the Bachelor thesis of 
 
 ## References
 [1] P. Gawłowicz, A. Zubow, and F. Dressler, “Wi-Lo: Emulation of LoRa using Commodity 802.11b WiFi Devices,” in IEEE ICC 2022, Seoul, South Korea: IEEE, May 2022, pp. 4414–4419.
+
 [2] [1] N. Einfeldt, “Design of a Low-Cost Software-Defined Radio System Based on Waveform Emulation,” Bachelor Thesis, School of Electrical Engineering and Computer Science (EECS) / TU Berlin (TUB), Berlin, Germany, 2022.
+
 [3] M. Vanhoef and F. Piessens, “Advanced Wi-Fi Attacks Using Commodity Hardware,” in 30th Annual Computer Security Applications Conference (ACSAC 2014), New Orleans, LA: ACM, Dec. 2014, pp. 256–265.
