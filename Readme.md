@@ -75,6 +75,7 @@ We also provide the code we used to simulate the performance of Wi-Lo++ in `simu
 - `multi_packet_sim_knowndelay_func.m`: A study of the influence an additional delay which Wi-Lo++ will take into account.
 - `multi_packet_sim_jitter_func.m`: A study of the influence of jittering within the synchronization. There is an randomized Gaussian distributed delay calculated for each WiFi packet. This delay is unknown to the Wi-Lo++ calculation.
 - `multi_packet_sim_plen_func.m`: A study of which packet length Wi-Lo++ can successfully emulate.
+
 The functions take different configuration parameters as list to allow internal loops.
 This makes evaluation of different parameters possible.
 There is also a `purlora` mode provided to get the data for non-emulated LoRa.
