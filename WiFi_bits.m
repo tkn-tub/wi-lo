@@ -1,4 +1,18 @@
-function bits = WiFi_bits(nbIQ, header_mac, cfgNonHT, scrambler_init, DISABLE_IFS, DISABLE_BLANKING)
+function bits = WiFi_bits(nbIQ, header_mac, cfgNonHT, scrambler_init, DISABLE_IFS, ...
+    DISABLE_BLANKING, blanksymbols, MAX_HW_BYTES, mode, overlap)
+    
+    arguments
+        nbIQ
+        header_mac
+        cfgNonHT
+        scrambler_init
+        DISABLE_IFS
+        DISABLE_BLANKING
+        blanksymbols (1,1) int64 = 0
+        MAX_HW_BYTES = 2304
+        mode = "std"
+        overlap = false
+    end
     % WiFi_bits Converts a Narrowband Complex Waveform to WiFi payload bits
     %   in:     nbIQ                narrowband waveform to emulate
     %           cfgNonHT            cfgDSSS
@@ -16,7 +30,8 @@ function bits = WiFi_bits(nbIQ, header_mac, cfgNonHT, scrambler_init, DISABLE_IF
     assert(size(nbIQ, 2) == 1, "Narrowband IQ needs dimensions N-by-1");
 
     % Clause 17.3.3 DS PHY characteristics
-    MAX_PSDU_BYTES = 2304 - 38;
+    %; %2304;
+    MAX_PSDU_BYTES = MAX_HW_BYTES - 38;
     MAX_PSDU_BITS = MAX_PSDU_BYTES * 8;
 
     MAX_DATA_BYTES = MAX_PSDU_BYTES - length(header_mac)/8;
@@ -27,7 +42,13 @@ function bits = WiFi_bits(nbIQ, header_mac, cfgNonHT, scrambler_init, DISABLE_IF
     else
         PLCP_time = 96e-6; % Clause 17.2.2.3 Short PPDU format
     end
-    blankSymbols = wlanSampleRate(cfgNonHT) * PLCP_time;
+    
+    % No blank symbols in case signals can overlap
+    if ~overlap
+        blankSymbols = wlanSampleRate(cfgNonHT) * PLCP_time + length(header_mac) + blanksymbols;
+    else
+        blankSymbols = blanksymbols;
+    end
 
     % Clause 17.2.4 PLCP/High Rate PHY data scrambler and descrambler
     cfgInfo = wlan.internal.dsssInfo(cfgNonHT);
@@ -54,7 +75,12 @@ function bits = WiFi_bits(nbIQ, header_mac, cfgNonHT, scrambler_init, DISABLE_IF
     wifi_packets = ceil(dim/MAX_DATA_BITS);
         
     IQ_pointer = 1; % points to the beginning of chunk
-    bits = ones(wifi_packets, MAX_PSDU_BITS) * -1; % WARUM NICHT AUFGERUNDET WIE DIM?
+
+    if MAX_PSDU_BITS ~= Inf
+        bits = ones(wifi_packets, MAX_PSDU_BITS) * -1; % WARUM NICHT AUFGERUNDET WIE DIM?
+    else
+        bits = ones(1, length(nbIQ)) * -1;
+    end
     
     chunk_id = 1;
 
@@ -88,7 +114,27 @@ function bits = WiFi_bits(nbIQ, header_mac, cfgNonHT, scrambler_init, DISABLE_IF
         assert(mod(length(chunk),8) == 0, "Chunk size is not whole bytes");
 
         % Rebuild Narrowband signal by using only valid CCK-Codewords
-        [emulatedSignal, ~] = rebuildNB(chunk); % len x 1
+        if mode == "std"
+            [emulatedSignal, ~] = rebuildNB(chunk); % len x 1
+        elseif mode == "opt"
+            [emulatedSignal, ~] = rebuildNB_opt(chunk); % len x 1
+        elseif mode == "filter"
+            [emulatedSignal, ~] = rebuildNB_filter(chunk); % len x 1
+        elseif mode == "phase"
+            [emulatedSignal, ~] = rebuildNB_phase(chunk); % len x 1
+        elseif mode == "dist"
+            [emulatedSignal, ~] = rebuildNB_dist(chunk); % len x 1
+        elseif mode == "distsep"
+            [emulatedSignal, ~] = rebuildNB_dist_sep(chunk); % len x 1
+        elseif mode == "sumdist"
+            [emulatedSignal, ~] = rebuildNB_sumdist(chunk); % len x 1
+        elseif mode == "sumdistsep"
+            [emulatedSignal, ~] = rebuildNB_sumdist_sep(chunk); % len x 1
+        elseif mode == "L1"
+            [emulatedSignal, ~] = rebuildNB_L1(chunk); % len x 1
+        elseif mode == "L2"
+            [emulatedSignal, ~] = rebuildNB_L2(chunk); % len x 1
+        end
 
         % Calculate PLCP fields that depend on PSDU length, calculate refPhase
         cfgNonHT.PSDULength = (length(header_mac) + length(emulatedSignal))/8; % length(emulatedSignal)/8;
@@ -100,9 +146,57 @@ function bits = WiFi_bits(nbIQ, header_mac, cfgNonHT, scrambler_init, DISABLE_IF
         header_plcp = [cfgInfo.Signal; cfgInfo.Service; cfgInfo.Length; header_crc]; % TODO add bitstream MAC header
 
         scrambledPLCP = scr([preamble; header_plcp; header_mac], 1);
-        pskSymbols = wlan.internal.dsssPSKModulate(scrambledPLCP,'2Mbps');
-        refPhase = angle(pskSymbols(end));
 
+        if (strcmpi(cfgNonHT.Preamble,'Long'))
+            % Repeat preamble and header bits; 'P' is also the right
+            % number of modulated symbols to skip when extracting the
+            % data part
+            P = length([preamble; header_plcp]);
+        else
+            % Repeat just preamble bits; for short preamble the header
+            % is already DQPSK; 'P' must be amended to skip the
+            % modulated header symbols
+            P = length(preambleBits);
+        end
+        % Repeat appropriate bits
+        scrambledPLCP_l = reshape(repmat(scrambledPLCP(1:P,1),1,2).',P*2,1);
+        % Amend 'P' for short preamble
+        if (strcmpi(cfgNonHT.Preamble,'Short'))
+            P = P + length(headerBits)/2;
+        end
+        
+        pskSymbols = wlan.internal.dsssPSKModulate(scrambledPLCP_l,'2Mbps');
+        refPhase = angle(pskSymbols(end));
+        
+        % if there is a mac header present, calculate phi_ref accordingly
+        % daten from dsssCCKModulate
+        if length(scrambledPLCP) > P
+            if (strcmpi(cfgNonHT.DataRate,'5.5Mbps'))
+                % Clause 17.4.6.6.3 CCK 5.5 Mb/s modulation
+                cckOrder = 4;
+            else
+                % Clause 17.4.6.6.4 CCK 11 Mb/s modulation
+                cckOrder = 8;
+            end
+            
+            % Establish cckSymbols, the number of CCK symbols in the PSDU
+            cckSymbols = (length(scrambledPLCP(P+1:end,1))/cckOrder);
+            
+            % Reshape the data bits to put modulation symbols in rows
+            d = reshape(scrambledPLCP(P+1:end,1),cckOrder,cckSymbols).';
+            % Calculate phi1
+            phi1 = zeros(cckSymbols,1);
+            % Initialize phi1 with reference phase from final header symbol
+            phi1(1) = refPhase;
+            % Extra 180 degree (pi) rotation on odd-numbered symbols
+            phi1(2:2:end) = pi;
+            % DQPSK modulation of dibit (d0,d1)
+            dqpsk_in = [d(:,1).'; d(:,2).'];
+            phi1 = mod(cumsum(phi1) + angle(wlan.internal.dsssPSKModulate( ...
+                dqpsk_in(:),'2Mbps')), 2*pi);
+    
+            refPhase = phi1(end);
+        end
 
         % Despread the emulated Signal: For each selected Codeword get the phases
         PSDU_phases = cckDeSpread(emulatedSignal); % len/8 x 4
@@ -138,10 +232,345 @@ function [emulatedSignal, selectedIdxs] = rebuildNB(nbIQ)
     counter = 1;
     for i = 1:8:length(nbIQ)
         chunk = nbIQ(i:i+7, :);
-        corrReal = xcorr2(real(possibleCCKCodewords), real(chunk));
-        corrImag = xcorr2(imag(possibleCCKCodewords), imag(chunk));
+        corrReal = real(possibleCCKCodewords).' * real(chunk); %xcorr2(real(possibleCCKCodewords), real(chunk));
+        corrImag = imag(possibleCCKCodewords).' * imag(chunk); %xcorr2(imag(possibleCCKCodewords), imag(chunk));
 
-        corr = corrReal(8,:) + corrImag(8,:); % 1x256
+        corr = corrReal + corrImag; %corrReal(8,:) + corrImag(8,:); % 1x256
+        [~, idx] = max(corr);
+
+        %dlmwrite('chunk.csv',chunk.','delimiter',',','-append');
+        %dlmwrite('correlations.csv',corr.','delimiter',',','-append');
+
+        bestCodeword = possibleCCKCodewords(:,idx);
+        emulatedSignal(i:i+7,:) = bestCodeword;
+
+        selectedIdxs(counter) = idx;
+        counter = counter + 1;
+    end
+end
+
+function [emulatedSignal, selectedIdxs] = rebuildNB_phase(nbIQ)
+    % rebuildNB selects the best fitting CCK codeword that emulates the
+    % narrow-band IQ
+    %   in:     nbIQ                narrow-band I/Q-signal that should be emulated
+    %   out:    emulatedSignal      the emulated signal rebuild from CCK
+    %                               codewords
+    %           selectedIdx         a list of indexes that were selected
+    % codegen
+
+    possibleCCKCodewords = generateCCKCodewords();
+
+    possibleCCKCodewords_phi = angle(possibleCCKCodewords);
+
+    emulatedSignal = zeros(length(nbIQ), 1);
+    selectedIdxs = zeros(length(nbIQ)/8, 1);
+    counter = 1;
+    for i = 1:8:length(nbIQ)
+        chunk = nbIQ(i:i+7, :);
+        chunk_phi = angle(chunk);
+        corr = possibleCCKCodewords_phi.'  * chunk_phi;
+
+        %dlmwrite('chunk.csv',chunk.','delimiter',',','-append');
+        %dlmwrite('correlations.csv',corr.','delimiter',',','-append');
+
+        %corrReal = real(possibleCCKCodewords).' * real(chunk); %xcorr2(real(possibleCCKCodewords), real(chunk));
+        %corrImag = imag(possibleCCKCodewords).' * imag(chunk); %xcorr2(imag(possibleCCKCodewords), imag(chunk));
+
+        %corr = corrReal + corrImag; %corrReal(8,:) + corrImag(8,:); % 1x256
+        [~, idx] = max(corr);
+
+        bestCodeword = possibleCCKCodewords(:,idx);
+        emulatedSignal(i:i+7,:) = bestCodeword;
+
+        selectedIdxs(counter) = idx;
+        counter = counter + 1;
+    end
+end
+
+function [emulatedSignal, selectedIdxs] = rebuildNB_L2(nbIQ)
+    % rebuildNB selects the best fitting CCK codeword that emulates the
+    % narrow-band IQ
+    %   in:     nbIQ                narrow-band I/Q-signal that should be emulated
+    %   out:    emulatedSignal      the emulated signal rebuild from CCK
+    %                               codewords
+    %           selectedIdx         a list of indexes that were selected
+    % codegen
+
+    possibleCCKCodewords = generateCCKCodewords();
+
+    emulatedSignal = zeros(length(nbIQ), 1);
+    selectedIdxs = zeros(length(nbIQ)/8, 1);
+    counter = 1;
+    for i = 1:8:length(nbIQ)
+        chunk = nbIQ(i:i+7, :);
+
+        corr = vecnorm(possibleCCKCodewords - chunk, 2); %sum(abs(possibleCCKCodewords - chunk));
+
+        [~, idx] = min(corr);
+
+        bestCodeword = possibleCCKCodewords(:,idx);
+        emulatedSignal(i:i+7,:) = bestCodeword;
+
+        selectedIdxs(counter) = idx;
+        counter = counter + 1;
+    end
+end
+
+function [emulatedSignal, selectedIdxs] = rebuildNB_L1(nbIQ)
+    % rebuildNB selects the best fitting CCK codeword that emulates the
+    % narrow-band IQ
+    %   in:     nbIQ                narrow-band I/Q-signal that should be emulated
+    %   out:    emulatedSignal      the emulated signal rebuild from CCK
+    %                               codewords
+    %           selectedIdx         a list of indexes that were selected
+    % codegen
+
+    possibleCCKCodewords = generateCCKCodewords();
+
+    emulatedSignal = zeros(length(nbIQ), 1);
+    selectedIdxs = zeros(length(nbIQ)/8, 1);
+    counter = 1;
+    for i = 1:8:length(nbIQ)
+        chunk = nbIQ(i:i+7, :);
+
+        corr = vecnorm(possibleCCKCodewords - chunk, 1); %sum(abs(possibleCCKCodewords - chunk));
+
+        [~, idx] = min(corr);
+
+        bestCodeword = possibleCCKCodewords(:,idx);
+        emulatedSignal(i:i+7,:) = bestCodeword;
+
+        selectedIdxs(counter) = idx;
+        counter = counter + 1;
+    end
+end
+
+function [emulatedSignal, selectedIdxs] = rebuildNB_dist(nbIQ)
+    % rebuildNB selects the best fitting CCK codeword that emulates the
+    % narrow-band IQ
+    %   in:     nbIQ                narrow-band I/Q-signal that should be emulated
+    %   out:    emulatedSignal      the emulated signal rebuild from CCK
+    %                               codewords
+    %           selectedIdx         a list of indexes that were selected
+    % codegen
+
+    possibleCCKCodewords = generateCCKCodewords();
+
+    emulatedSignal = zeros(length(nbIQ), 1);
+    selectedIdxs = zeros(length(nbIQ)/8, 1);
+    counter = 1;
+    for i = 1:8:length(nbIQ)
+        chunk = nbIQ(i:i+7, :);
+
+        corr = sum(abs(possibleCCKCodewords - chunk));
+
+        [~, idx] = min(corr);
+
+        bestCodeword = possibleCCKCodewords(:,idx);
+        emulatedSignal(i:i+7,:) = bestCodeword;
+
+        selectedIdxs(counter) = idx;
+        counter = counter + 1;
+    end
+end
+
+function [emulatedSignal, selectedIdxs] = rebuildNB_sumdist(nbIQ)
+    % rebuildNB selects the best fitting CCK codeword that emulates the
+    % narrow-band IQ
+    %   in:     nbIQ                narrow-band I/Q-signal that should be emulated
+    %   out:    emulatedSignal      the emulated signal rebuild from CCK
+    %                               codewords
+    %           selectedIdx         a list of indexes that were selected
+    % codegen
+
+    possibleCCKCodewords = generateCCKCodewords();
+
+    emulatedSignal = zeros(length(nbIQ), 1);
+    selectedIdxs = zeros(length(nbIQ)/8, 1);
+    counter = 1;
+    for i = 1:8:length(nbIQ)
+        chunk = nbIQ(i:i+7, :);
+
+        corr = abs(sum(possibleCCKCodewords - chunk));
+
+        [~, idx] = min(corr);
+
+        bestCodeword = possibleCCKCodewords(:,idx);
+        emulatedSignal(i:i+7,:) = bestCodeword;
+
+        selectedIdxs(counter) = idx;
+        counter = counter + 1;
+    end
+end
+
+
+function [emulatedSignal, selectedIdxs] = rebuildNB_dist_sep(nbIQ)
+    % rebuildNB selects the best fitting CCK codeword that emulates the
+    % narrow-band IQ
+    %   in:     nbIQ                narrow-band I/Q-signal that should be emulated
+    %   out:    emulatedSignal      the emulated signal rebuild from CCK
+    %                               codewords
+    %           selectedIdx         a list of indexes that were selected
+    % codegen
+
+    possibleCCKCodewords = generateCCKCodewords();
+
+    emulatedSignal = zeros(length(nbIQ), 1);
+    selectedIdxs = zeros(length(nbIQ)/8, 1);
+    counter = 1;
+    for i = 1:8:length(nbIQ)
+        chunk = nbIQ(i:i+7, :);
+
+        rep = abs(real(possibleCCKCodewords) - real(chunk));
+        imp = abs(imag(possibleCCKCodewords) - imag(chunk));
+
+        corr = sum(rep) + sum(imp);
+        
+        [~, idx] = min(corr);
+
+        bestCodeword = possibleCCKCodewords(:,idx);
+        emulatedSignal(i:i+7,:) = bestCodeword;
+
+        selectedIdxs(counter) = idx;
+        counter = counter + 1;
+    end
+end
+
+function [emulatedSignal, selectedIdxs] = rebuildNB_sumdist_sep(nbIQ)
+    % rebuildNB selects the best fitting CCK codeword that emulates the
+    % narrow-band IQ
+    %   in:     nbIQ                narrow-band I/Q-signal that should be emulated
+    %   out:    emulatedSignal      the emulated signal rebuild from CCK
+    %                               codewords
+    %           selectedIdx         a list of indexes that were selected
+    % codegen
+
+    possibleCCKCodewords = generateCCKCodewords();
+
+    emulatedSignal = zeros(length(nbIQ), 1);
+    selectedIdxs = zeros(length(nbIQ)/8, 1);
+    counter = 1;
+    for i = 1:8:length(nbIQ)
+        chunk = nbIQ(i:i+7, :);
+
+        rep = (real(possibleCCKCodewords) - real(chunk));
+        imp = (imag(possibleCCKCodewords) - imag(chunk));
+
+        corr = abs(sum(rep) + sum(imp));
+        
+        [~, idx] = min(corr);
+
+        bestCodeword = possibleCCKCodewords(:,idx);
+        emulatedSignal(i:i+7,:) = bestCodeword;
+
+        selectedIdxs(counter) = idx;
+        counter = counter + 1;
+    end
+end
+
+function [emulatedSignal, selectedIdxs] = rebuildNB_opt(nbIQ)
+    % rebuildNB selects the best fitting CCK codeword that emulates the
+    % narrow-band IQ
+    %   in:     nbIQ                narrow-band I/Q-signal that should be emulated
+    %   out:    emulatedSignal      the emulated signal rebuild from CCK
+    %                               codewords
+    %           selectedIdx         a list of indexes that were selected
+    % codegen
+
+    %possibleCCKCodewords = generateCCKCodewords();
+
+    emulatedSignal = zeros(length(nbIQ), 1);
+    selectedIdxs = zeros(length(nbIQ)/8, 1);
+    counter = 1;
+    for i = 1:8:length(nbIQ)
+        chunk = nbIQ(i:i+7, :);
+        
+        phi = cck_despread_optim(chunk);
+
+        bestCodeword = wlan.internal.dsssCCKSpread(phi);
+        emulatedSignal(i:i+7,:) = bestCodeword;
+
+        %selectedIdxs(counter) = idx;
+        counter = counter + 1;
+    end
+end
+
+function est_phases = cck_despread_optim(received_symbol)
+    % received_symbol: 8x1 complex vector
+    % est_phases: estimated [phi1, phi2, phi3, phi4]
+
+    % Extract received phases
+    received_phases = angle(received_symbol);
+
+    % Optimization options
+    options = optimoptions('fminunc', ...
+        'Algorithm', 'quasi-newton', ...
+        'Display', 'off');
+
+    % Initial guess
+    phi0 = [0, 0, 0, 0];  % Initial guess for [phi1, phi2, phi3, phi4]
+
+    % Define loss function: squared angular error
+    loss_fn = @(phi) phase_loss(phi, received_phases);
+
+    % Solve optimization problem
+    est_phases = fminunc(loss_fn, phi0, options);
+
+    % Wrap to [0, 2pi)
+    est_phases = mod(est_phases, 2*pi);
+end
+
+function err = phase_loss(phi, received_phases)
+
+    spread = [ 1  1  1  1;
+             1  0  1  1;
+             1  1  0  1;
+             1  0  0  1;
+             1  1  1  0;
+             1  0  1  0;
+             1  1  0  0;
+             1  0  0  0; ];
+
+    model_phases = spread * phi.';
+
+    % Wrap model phases to [-pi, pi]
+    model_phases = mod(model_phases + pi, 2*pi) - pi;
+
+    % Compute phase error (modulo 2pi difference)
+    diff = received_phases - model_phases;
+    wrapped_diff = angle(exp(1j * diff));
+    err = sum(wrapped_diff.^2);
+end
+
+function [emulatedSignal, selectedIdxs] = rebuildNB_filter(nbIQ)
+    % rebuildNB selects the best fitting CCK codeword that emulates the
+    % narrow-band IQ
+    %   in:     nbIQ                narrow-band I/Q-signal that should be emulated
+    %   out:    emulatedSignal      the emulated signal rebuild from CCK
+    %                               codewords
+    %           selectedIdx         a list of indexes that were selected
+    % codegen
+
+    hist_len = 3 * 8;
+
+    possibleCCKCodewords = generateCCKCodewords();
+
+    emulatedSignal = zeros(length(nbIQ), 1);
+    selectedIdxs = zeros(length(nbIQ)/8, 1);
+    counter = 1;
+    for i = 1:8:length(nbIQ)
+        start_i = max(1, i - hist_len);
+        chunk = nbIQ(start_i:i+7, :);
+        presection = emulatedSignal(start_i:(i-1));
+
+        extended_codes_t = [repmat(presection, 1, 256); possibleCCKCodewords];
+
+        extended_codes = lowpass(extended_codes_t, 812e3,11e6);
+
+        corrReal = real(extended_codes).' * real(chunk); %xcorr2(real(possibleCCKCodewords), real(chunk));
+        corrImag = imag(extended_codes).' * imag(chunk); %xcorr2(imag(possibleCCKCodewords), imag(chunk));
+
+        corr = corrReal + corrImag; %corrReal(8,:) + corrImag(8,:); % 1x256
         [~, idx] = max(corr);
 
         bestCodeword = possibleCCKCodewords(:,idx);

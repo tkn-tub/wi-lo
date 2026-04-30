@@ -7,12 +7,16 @@ function wifi_payload = wilo_func(settings, payload)
     rf_freq = settings.lora.frequency;    % carrier frequency 470 MHz, used to correct clock drift
     sf = settings.lora.sf;             % spreading factor SF7
     bw = settings.lora.bw;         % bandwidth 125 kHz
+    shift = settings.lora.shift;
     fs_lora = 6.5e6;           % sampling rate 1 MHz
     fs_wifi = 11e6;
     wifi_mac = true;
+    mode = settings.lora.mode;
+    overlap = settings.overlap;
 
     mac_header_len = 36;
     scrambler_init = settings.scrambler_init;   % value according to the standard. Is different for Realtek cards
+    MAX_HW_BYTES = settings.MAX_HW_BYTES;
     
     disp([rf_freq, sf, bw]);
     
@@ -32,7 +36,8 @@ function wifi_payload = wilo_func(settings, payload)
     sig = phy.modulate(symbols);
     
     sig_norm = conj(sig);
-    lorawaveform_11 = resample(sig_norm, fs_wifi, fs_lora);
+    lorawaveform_11 = [zeros(shift, 1); resample(sig_norm, fs_wifi, fs_lora)];
+
     length_lora = ceil(length(lorawaveform_11) / 8);
     
     %% Beacon generation to get 802.11 mac header bits
@@ -92,7 +97,8 @@ function wifi_payload = wilo_func(settings, payload)
     %% Generate bits
     
     cfgNonHT = wlanNonHTConfig('Modulation', 'DSSS', 'DataRate', '11Mbps', 'Preamble', 'Long', 'LockedClocks', true);
-    bits = WiFi_bits(lorawaveform_11, used_mac_header, cfgNonHT, scrambler_init, DISABLE_IFS, DISABLE_PLCP); % generate bits that emulate the lora waveform
+    bits = WiFi_bits(lorawaveform_11, used_mac_header, cfgNonHT, scrambler_init, DISABLE_IFS, DISABLE_PLCP, ...
+        0,MAX_HW_BYTES, mode, overlap); % generate bits that emulate the lora waveform
     assert(mod(length(bits),8)==0, "LoRa_Emulate_80211b did not return whole bytes");
     
     disp("Done with generating bits.")
@@ -108,6 +114,10 @@ function wifi_payload = wilo_func(settings, payload)
             myend = size(bits,2);
         else
             myend = myend -1;
+        end
+
+        if myend <= 1
+            break;
         end
     
         bytes = bit2int(mybits(1:myend).',8,false);
